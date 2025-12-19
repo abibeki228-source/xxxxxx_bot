@@ -91,28 +91,22 @@ async def init_db():
         """)
         await db.commit()
 
-async def user_exists(user_id):
-    async with aiosqlite.connect(DB_NAME) as db:
-        cur = await db.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
-        return await cur.fetchone() is not None
-
 async def add_user(user_id, username, referrer_id=None):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute(
             "INSERT INTO users (user_id, username, referrer_id) VALUES (?, ?, ?)",
             (user_id, username, referrer_id)
         )
-        # скрытый лимит рефералов
+
         if referrer_id:
-            ref = await db.execute_fetchone(
-                "SELECT referrals FROM users WHERE user_id=?",
-                (referrer_id,)
-            )
+            cur = await db.execute("SELECT referrals FROM users WHERE user_id=?", (referrer_id,))
+            ref = await cur.fetchone()
             if ref and ref[0] < MAX_REFERRALS:
                 await db.execute(
                     "UPDATE users SET balance = balance + ?, referrals = referrals + 1 WHERE user_id=?",
                     (REF_BONUS, referrer_id)
                 )
+
         await db.commit()
 
 async def get_user(user_id):
@@ -140,18 +134,23 @@ async def start(message: Message):
     if not await user_exists(message.from_user.id):
         await add_user(message.from_user.id, message.from_user.username, referrer)
 
-    # Отправляем стикер в фоне
     asyncio.create_task(bot.send_sticker(
         chat_id=message.chat.id,
         sticker="CAACAgIAAxkBAAE_egZpRcu9w8P831WwAAGyNka8PNo24aMAAgQBAAL3AsgPIA93O-mryEk2BA"
     ))
 
-    # Одновременно отправляем сообщение с клавиатурой
     await message.answer("🐻 Добро пожаловать!", reply_markup=keyboard)
 # ================= ПРОФИЛЬ =================
 @dp.message(F.text == "👤 Профиль")
 async def profile(message: Message):
     user = await get_user(message.from_user.id)
+    
+    if not user:
+        # Если пользователя нет в базе, создаём его
+        await add_user(message.from_user.id, message.from_user.username)
+        user = await get_user(message.from_user.id)
+
+    # Отправляем данные профиля
     await message.answer(
         f"👤 Профиль\n"
         f"━━━━━━━━━━\n"
@@ -159,6 +158,12 @@ async def profile(message: Message):
         f"💰 Баланс: {user[2]:.2f} RUB\n"
         f"👥 Приглашено: {user[5]}"
     )
+
+# ================= ПРОВЕРКА СУЩЕСТВОВАНИЯ ПОЛЬЗОВАТЕЛЯ =================
+async def user_exists(user_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        cur = await db.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
+        return await cur.fetchone() is not None
 
 # ================= ЗАРАБОТАТЬ =================
 @dp.message(F.text == "💎 Заработать")
